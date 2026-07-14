@@ -19,11 +19,11 @@ class UserController extends BaseController
     public function index(Request $request): JsonResponse
     {
         try {
-            $filters = $request->only(['empresa_id', 'activo', 'buscar']);
-            $usuarios = $this->userService->listar($filters);
+            $filters   = $request->only(['empresa_id', 'activo', 'rol', 'buscar', 'pagina', 'por_pagina']);
+            $resultado = $this->userService->listar($filters);
 
-            return $this->success($usuarios, 'Usuarios obtenidos.');
-        } catch (\Exception $e) {
+            return $this->success($resultado, 'Usuarios obtenidos.');
+        } catch (\Exception) {
             return $this->error('Error al obtener usuarios.', 500);
         }
     }
@@ -35,13 +35,18 @@ class UserController extends BaseController
     {
         try {
             $validated = $request->validate([
-                'empresa_id'   => 'required|integer|exists:EMPRESAS,id',
-                'cod_personal' => 'required|string|max:20',
-                'dni'          => 'required|string|max:15',
-                'usuario'      => 'required|string|max:100|unique:USUARIOS_INTRANET,usuario',
-                'password'     => 'required|string|min:6|confirmed',
-                'foto_url'     => 'nullable|url|max:500',
-                'activo'       => 'boolean',
+                'empresa_id'        => 'required|integer|exists:EMPRESAS,id',
+                'cod_personal'      => 'required|string|max:20',
+                'ape_paterno'       => 'nullable|string|max:100',
+                'ape_materno'       => 'nullable|string|max:100',
+                'nom_trabajador'    => 'nullable|string|max:200',
+                'cod_personal_jefe' => 'nullable|string|max:20',
+                'dni'               => 'required|string|max:15',
+                'usuario'           => 'required|string|max:100|unique:USUARIOS_INTRANET,usuario',
+                'password'          => 'required|string|min:6|confirmed',
+                'foto_url'          => 'nullable|url|max:500',
+                'rol'               => 'nullable|string|in:ADMIN,EMPLEADO',
+                'activo'            => 'boolean',
             ]);
         } catch (ValidationException $e) {
             return $this->error('Datos inválidos.', 422, $e->errors());
@@ -67,12 +72,17 @@ class UserController extends BaseController
     {
         try {
             $validated = $request->validate([
-                'empresa_id'   => 'integer|exists:EMPRESAS,id',
-                'cod_personal' => 'string|max:20',
-                'dni'          => 'string|max:15',
-                'usuario'      => "string|max:100|unique:USUARIOS_INTRANET,usuario,{$id}",
-                'foto_url'     => 'nullable|url|max:500',
-                'activo'       => 'boolean',
+                'empresa_id'        => 'integer|exists:EMPRESAS,id',
+                'cod_personal'      => 'string|max:20',
+                'ape_paterno'       => 'nullable|string|max:100',
+                'ape_materno'       => 'nullable|string|max:100',
+                'nom_trabajador'    => 'nullable|string|max:200',
+                'cod_personal_jefe' => 'nullable|string|max:20',
+                'dni'               => 'string|max:15',
+                'usuario'           => "string|max:100|unique:USUARIOS_INTRANET,usuario,{$id}",
+                'foto_url'          => 'nullable|url|max:500',
+                'rol'               => 'nullable|string|in:ADMIN,EMPLEADO',
+                'activo'            => 'boolean',
             ]);
         } catch (ValidationException $e) {
             return $this->error('Datos inválidos.', 422, $e->errors());
@@ -133,7 +143,7 @@ class UserController extends BaseController
             );
         } catch (ModelNotFoundException) {
             return $this->error('Usuario no encontrado.', 404);
-        } catch (QueryException $e) {
+        } catch (QueryException) {
             return $this->error('Error de base de datos.', 500);
         }
     }

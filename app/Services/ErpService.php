@@ -3,20 +3,34 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ErpService
 {
     /**
-     * Datos del trabajador desde SP_INTRANET_GET_TRABAJADOR (vive en INTRANETCLL).
+     * Datos del trabajador desde SP_INTRANET_GET_TRABAJADOR (vive en cada BD del ERP).
      */
     public function getTrabajador(string $dbName, string $codPersonal): array|null
     {
-        $rows = DB::select(
-            'EXEC SP_INTRANET_GET_TRABAJADOR @db_name = ?, @cod_personal = ?',
-            [$dbName, $codPersonal]
-        );
+        Log::debug('[ERP] getTrabajador', ['db_name' => $dbName, 'cod_personal' => $codPersonal]);
 
-        return $rows ? (array) $rows[0] : null;
+        try {
+            $rows = DB::select(
+                "EXEC [{$dbName}].dbo.SP_INTRANET_GET_TRABAJADOR @cod_personal = ?",
+                [$codPersonal]
+            );
+
+            Log::debug('[ERP] getTrabajador resultado', ['filas' => count($rows)]);
+
+            return $rows ? (array) $rows[0] : null;
+        } catch (\Exception $e) {
+            Log::error('[ERP] getTrabajador error', [
+                'db_name'      => $dbName,
+                'cod_personal' => $codPersonal,
+                'error'        => $e->getMessage(),
+            ]);
+            throw $e;
+        }
     }
 
     /**
@@ -30,12 +44,15 @@ class ErpService
         $limite = max(1, min(60, $limite));
 
         $sql = "SELECT DISTINCT TOP {$limite}
-                    ANO_PROCESO,
-                    MES_PROCESO,
-                    ANO_PROCESO + MES_PROCESO AS periodo_clave
+                    CAST(ANO_PROCESO  AS INT) AS ANO_PROCESO,
+                    CAST(MES_PROCESO  AS INT) AS MES_PROCESO,
+                    CAST(ANO_PROCESO  AS VARCHAR(4))
+                        + RIGHT('0' + CAST(MES_PROCESO AS VARCHAR(2)), 2) AS periodo_clave
                 FROM [{$dbName}].dbo.PLA_MOVI_MES
                 WHERE COD_EMPRESA  = ?
                   AND COD_PERSONAL = ?
+                  AND ISNUMERIC(MES_PROCESO) = 1
+                  AND CAST(MES_PROCESO AS INT) BETWEEN 1 AND 12
                 ORDER BY ANO_PROCESO DESC, MES_PROCESO DESC";
 
         $rows = DB::select($sql, [$codEmpresaErp, $codPersonal]);
@@ -146,15 +163,14 @@ class ErpService
     }
 
     /**
-     * Vacaciones: resumen + historial del trabajador.
-     * El SP retorna una fila por solicitud; la primera fila siempre trae
-     * los datos del empleado y los totales (repetidos en cada fila).
+     * Vacaciones registradas y validadas por RRHH (desde PLA_VACACIONES_MES_CAB).
+     * Retorna resumen anual + historial de sesiones procesadas en planilla.
      */
     public function getVacaciones(string $dbName, string $codPersonal): array|null
     {
         $rows = DB::select(
-            'EXEC SP_INTRANET_GET_VACACIONES @db_name = ?, @cod_personal = ?',
-            [$dbName, $codPersonal]
+            "EXEC [{$dbName}].dbo.SP_INTRANET_GET_VACACIONES @cod_personal = ?",
+            [$codPersonal]
         );
 
         if (empty($rows)) {
@@ -163,45 +179,32 @@ class ErpService
 
         $primera = $rows[0];
 
-        // ── Mapa de estados del ERP → claves usadas en el frontend ────────
-        // Ajusta los códigos según tu ERP (ver comentarios en el SP)
-        $estadoMap = [
-            'PE' => ['clave' => 'pendiente',       'label' => 'Pendiente'],
-            'AJ' => ['clave' => 'aprobado_jefe',   'label' => 'Aprobado por Jefe'],
-            'RJ' => ['clave' => 'rechazado_jefe',  'label' => 'Rechazado por Jefe'],
-            'AR' => ['clave' => 'aprobado_rh',     'label' => 'Aprobado por RRHH'],
-            'RR' => ['clave' => 'rechazado_rh',    'label' => 'Rechazado por RRHH'],
-            'CA' => ['clave' => 'cancelado',        'label' => 'Cancelado'],
-        ];
-
         $tipoMap = [
             'VG' => 'Vacaciones Gozadas',
             'VC' => 'Compra de Vacaciones',
+            'VN' => 'Vacaciones Normales',
         ];
 
-        // ── Historial (solo filas con COD_CORR_VAC no nulo) ────────────────
         $historial = [];
         foreach ($rows as $fila) {
             if (empty($fila->COD_CORR_VAC)) {
                 continue;
             }
-            $estado    = trim($fila->IND_ESTADO ?? '');
-            $estadoInfo = $estadoMap[$estado] ?? ['clave' => strtolower($estado), 'label' => $estado];
 
             $historial[] = [
-                'cod_corr_vac' => $fila->COD_CORR_VAC,
-                'fec_inicio'   => $fila->FEC_INICIO
+                'cod_corr_vac'      => $fila->COD_CORR_VAC,
+                'fec_inicio'        => $fila->FEC_INICIO
                     ? date('d/m/Y', strtotime($fila->FEC_INICIO)) : '',
-                'fec_final'    => $fila->FEC_FINAL
-                    ? date('d/m/Y', strtotime($fila->FEC_FINAL)) : '',
-                'num_dias'     => (int) ($fila->NUM_DIAS ?? 0),
-                'tipo'         => trim($fila->TIP_VACACIONES ?? ''),
-                'tipo_label'   => $tipoMap[trim($fila->TIP_VACACIONES ?? '')] ?? $fila->TIP_VACACIONES,
-                'ano_proceso'  => $fila->ANO_PROCESO ?? '',
-                'estado'       => $estadoInfo['clave'],
-                'estado_label' => $estadoInfo['label'],
-                // Cancelable solo si está pendiente o aprobado por jefe
-                'cancelable'   => in_array($estado, ['PE', 'AJ']),
+                'fec_final'         => $fila->FEC_FIN
+                    ? date('d/m/Y', strtotime($fila->FEC_FIN)) : '',
+                'num_dias'          => (int) ($fila->NUM_TOT_DIAS ?? 0),
+                'importe'           => (float) ($fila->IMP_TOT_VACACION ?? 0),
+                'tipo'              => trim($fila->TIP_VACACIONES ?? ''),
+                'tipo_label'        => $tipoMap[trim($fila->TIP_VACACIONES ?? '')] ?? ($fila->TIP_VACACIONES ?? '—'),
+                'ano_proceso'       => $fila->ANO_PROCESO ?? '',
+                'mes_proceso'       => $fila->MES_PROCESO ?? '',
+                'cod_periodo'       => $fila->COD_PERIODO ?? '',
+                'transf_planilla'   => ($fila->IND_TRANSF_PLAN ?? '') === 'S',
             ];
         }
 
@@ -222,27 +225,131 @@ class ErpService
     }
 
     /**
-     * Crea una solicitud de vacaciones en PLA_VACACIONES_MES del ERP.
-     * Retorna el COD_CORR_VAC generado.
+     * Solicitudes de vacaciones generadas en la intranet (PLA_SOL_VACACIONES).
+     * Incluye el flujo de aprobación: PE → AJ/RJ → AR/RR/CA.
      */
-    public function crearSolicitudVac(
+    public function getSolicitudesVac(string $dbName, string $codPersonal): array
+    {
+        $rows = DB::select(
+            "EXEC [{$dbName}].dbo.SP_INTRANET_GET_SOLICITUDES_VAC @cod_personal = ?",
+            [$codPersonal]
+        );
+
+        $estadoMap = [
+            'PE' => ['clave' => 'pendiente',       'label' => 'Pendiente'],
+            'AJ' => ['clave' => 'aprobado_jefe',   'label' => 'Aprobado por Jefe'],
+            'RJ' => ['clave' => 'rechazado_jefe',  'label' => 'Rechazado por Jefe'],
+            'AR' => ['clave' => 'aprobado_rh',     'label' => 'Aprobado por RRHH'],
+            'RR' => ['clave' => 'rechazado_rh',    'label' => 'Rechazado por RRHH'],
+            'CA' => ['clave' => 'cancelado',        'label' => 'Cancelado'],
+        ];
+
+        $tipoMap = [
+            'VG' => 'Vacaciones Gozadas',
+            'VC' => 'Compra de Vacaciones',
+        ];
+
+        return array_map(function ($fila) use ($estadoMap, $tipoMap) {
+            $estado     = trim($fila->ESTADO_APROBACION ?? 'PE');
+            $estadoInfo = $estadoMap[$estado] ?? ['clave' => strtolower($estado), 'label' => $estado];
+
+            return [
+                'cod_corr_sol'      => trim($fila->COD_CORR_SOL ?? ''),
+                'tipo'              => trim($fila->TIP_VACACIONES ?? ''),
+                'tipo_label'        => $tipoMap[trim($fila->TIP_VACACIONES ?? '')] ?? ($fila->TIP_VACACIONES ?? '—'),
+                'ano_proceso'       => $fila->ANO_PROCESO ?? '',
+                'mes_proceso'       => $fila->MES_PROCESO ?? '',
+                'fec_inicio'        => $fila->FEC_INICIO
+                    ? date('d/m/Y', strtotime($fila->FEC_INICIO)) : '',
+                'fec_final'         => $fila->FEC_FINAL
+                    ? date('d/m/Y', strtotime($fila->FEC_FINAL)) : '',
+                'num_dias'          => (int) ($fila->NUM_DIAS ?? 0),
+                'estado'            => $estadoInfo['clave'],
+                'estado_label'      => $estadoInfo['label'],
+                'fec_actualiza'     => $fila->FEC_ACTUALIZA ?? null,
+                'imp_adelanto'      => $fila->IMP_ADELANTO_VACAC ? (float) $fila->IMP_ADELANTO_VACAC : null,
+                'cancelable'        => in_array($estado, ['PE', 'AJ']),
+            ];
+        }, $rows);
+    }
+
+    /**
+     * Cancela una solicitud intranet (PE o AJ → CA) en PLA_SOL_VACACIONES.
+     */
+    public function cancelarSolVac(
         string $dbName,
         string $codEmpresaErp,
         string $codPersonal,
-        string $tipVac,
-        string $fecInicio,
-        string $fecFinal,
-        int    $numDias,
-        string $anoProceso,
-        ?string $obs = null
-    ): int {
+        string $codCorrSol
+    ): bool {
         $rows = DB::select(
-            'EXEC SP_INTRANET_CREAR_SOLICITUD_VAC ?, ?, ?, ?, ?, ?, ?, ?, ?',
-            [$dbName, $codEmpresaErp, $codPersonal, $tipVac,
-             $fecInicio, $fecFinal, $numDias, $anoProceso, $obs]
+            "EXEC [{$dbName}].dbo.SP_INTRANET_CANCELAR_SOL_VAC @cod_empresa = ?, @cod_personal = ?, @cod_corr_sol = ?",
+            [$codEmpresaErp, $codPersonal, $codCorrSol]
         );
 
-        return (int) ($rows[0]->COD_CORR_VAC ?? 0);
+        return (int) ($rows[0]->FILAS_AFECTADAS ?? 0) > 0;
+    }
+
+    /**
+     * Crea una solicitud de vacaciones en PLA_SOL_VACACIONES del ERP
+     * vía SP_INTRANET_CREAR_SOL_VAC (Patrón B). Retorna el COD_CORR_SOL generado.
+     */
+    public function crearSolicitudVac(
+        string   $dbName,
+        string   $codEmpresaErp,
+        string   $codPersonal,
+        string   $tipVac,
+        int      $anoProceso,
+        int      $mesProceso,
+        string   $fecInicio,
+        string   $fecFinal,
+        string   $codUserActual,
+        ?string  $codPersonalJefe   = null,
+        ?float   $impAdelantoVacac  = null,
+        ?float   $descuentoAfp      = null,
+        ?string  $periodoVac        = null
+    ): string {
+        $sql = "
+            DECLARE @sol VARCHAR(5), @res INT, @msg VARCHAR(500);
+            EXEC [{$dbName}].dbo.SP_INTRANET_CREAR_SOL_VAC
+                @COD_PERSONAL       = ?,
+                @COD_EMPRESA        = ?,
+                @TIP_VACACIONES     = ?,
+                @ANO_PROCESO        = ?,
+                @MES_PROCESO        = ?,
+                @FEC_INICIO         = ?,
+                @FEC_FINAL          = ?,
+                @COD_USER_ACTUAL    = ?,
+                @COD_PERSONAL_JEFE  = ?,
+                @IMP_ADELANTO_VACAC = ?,
+                @DESCUENTO_AFP      = ?,
+                @PERIODO_VAC        = ?,
+                @COD_CORR_SOL       = @sol OUTPUT,
+                @RESULTADO          = @res OUTPUT,
+                @MENSAJE            = @msg OUTPUT;
+            SELECT @sol AS cod_corr_sol, @res AS resultado, @msg AS mensaje;
+        ";
+
+        $result = DB::selectOne($sql, [
+            $codPersonal,
+            $codEmpresaErp,
+            $tipVac,
+            $anoProceso,
+            $mesProceso,
+            $fecInicio,
+            $fecFinal,
+            $codUserActual,
+            $codPersonalJefe,
+            $impAdelantoVacac,
+            $descuentoAfp,
+            $periodoVac,
+        ]);
+
+        if (($result->resultado ?? -1) !== 0) {
+            throw new \RuntimeException($result->mensaje ?? 'Error al crear la solicitud.');
+        }
+
+        return (string) $result->cod_corr_sol;
     }
 
     /**
@@ -259,8 +366,8 @@ class ErpService
         ?string $periodoVac = null
     ): string {
         $rows = DB::select(
-            'EXEC SP_INTRANET_APROBAR_VAC ?, ?, ?, ?, ?, ?, ?',
-            [$dbName, $codEmpresaErp, $codPersonal, $codCorrVac, $accion, $obs, $periodoVac]
+            "EXEC [{$dbName}].dbo.SP_INTRANET_APROBAR_VAC @cod_empresa = ?, @cod_personal = ?, @cod_corr_vac = ?, @accion = ?, @obs = ?, @periodo_vac = ?",
+            [$codEmpresaErp, $codPersonal, $codCorrVac, $accion, $obs, $periodoVac]
         );
 
         return $rows[0]->NUEVO_ESTADO ?? '';
@@ -276,8 +383,8 @@ class ErpService
         int    $codCorrVac
     ): bool {
         $rows = DB::select(
-            'EXEC SP_INTRANET_CANCELAR_VAC ?, ?, ?, ?',
-            [$dbName, $codEmpresaErp, $codPersonal, $codCorrVac]
+            "EXEC [{$dbName}].dbo.SP_INTRANET_CANCELAR_VAC @cod_empresa = ?, @cod_personal = ?, @cod_corr_vac = ?",
+            [$codEmpresaErp, $codPersonal, $codCorrVac]
         );
 
         return (int) ($rows[0]->FILAS_AFECTADAS ?? 0) > 0;

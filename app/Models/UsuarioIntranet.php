@@ -16,11 +16,17 @@ class UsuarioIntranet extends Authenticatable
     protected $fillable = [
         'empresa_id',
         'cod_personal',
+        'ape_paterno',
+        'ape_materno',
+        'nom_trabajador',
+        'cod_personal_jefe',
         'dni',
         'usuario',
         'password_hash',
         'foto_url',
+        'rol',
         'activo',
+        'debe_cambiar_password',
     ];
 
     protected $hidden = [
@@ -28,7 +34,8 @@ class UsuarioIntranet extends Authenticatable
     ];
 
     protected $casts = [
-        'activo' => 'boolean',
+        'activo'                 => 'boolean',
+        'debe_cambiar_password'  => 'boolean',
     ];
 
     /**

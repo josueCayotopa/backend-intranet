@@ -78,7 +78,10 @@ class ErpController extends BaseController
             $data = $this->erpService->getTrabajador($dbName, $codPersonal);
 
             if ($data === null) {
-                return $this->error('Trabajador no encontrado en el ERP.', 404);
+                return $this->error(
+                    "Trabajador no encontrado en el ERP (db={$dbName}, cod={$codPersonal}).",
+                    404
+                );
             }
 
             return $this->success($data, 'Datos del trabajador obtenidos.');
@@ -88,36 +91,50 @@ class ErpController extends BaseController
     }
 
     /**
-     * Crea una solicitud de vacaciones en el ERP.
+     * Crea una solicitud de vacaciones en el ERP vía SP_INTRANET_CREAR_SOL_VAC.
      */
     public function crearSolicitudVac(Request $request): JsonResponse
     {
         try {
             $v = $request->validate([
-                'tipo'      => 'required|in:VG,VC',
-                'fec_inicio'=> 'required|date',
-                'fec_final' => 'required|date|after_or_equal:fec_inicio',
-                'obs'       => 'nullable|string|max:500',
+                'tipo'               => 'required|in:VG,VC',
+                'ano_proceso'        => 'required|integer|min:2000|max:2100',
+                'mes_proceso'        => 'required|integer|min:1|max:12',
+                'fec_inicio'         => 'required|date',
+                'fec_final'          => 'required|date|after_or_equal:fec_inicio',
+                'cod_personal_jefe'  => 'nullable|string|max:10',
+                'imp_adelanto_vacac' => 'nullable|numeric|min:0',
+                'descuento_afp'      => 'nullable|numeric|min:0',
+                'periodo_vac'        => 'nullable|string|max:100',
             ]);
         } catch (ValidationException $e) {
             return $this->error('Datos inválidos.', 422, $e->errors());
         }
 
         [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+        $codUserActual = $request->user()->usuario ?? $codPersonal;
 
-        $ini  = $v['fec_inicio'];
-        $fin  = $v['fec_final'];
-        $dias = (int) ceil((strtotime($fin) - strtotime($ini)) / 86400) + 1;
-        $ano  = substr($ini, 0, 4);
+        $numDias = (int) ((strtotime($v['fec_final']) - strtotime($v['fec_inicio'])) / 86400) + 1;
 
         try {
-            $codCorr = $this->erpService->crearSolicitudVac(
-                $dbName, $codErp, $codPersonal,
-                $v['tipo'], $ini, $fin, $dias, $ano, $v['obs'] ?? null
+            $codCorrSol = $this->erpService->crearSolicitudVac(
+                $dbName,
+                $codErp,
+                $codPersonal,
+                $v['tipo'],
+                (int) $v['ano_proceso'],
+                (int) $v['mes_proceso'],
+                $v['fec_inicio'],
+                $v['fec_final'],
+                $codUserActual,
+                $v['cod_personal_jefe']  ?? null,
+                isset($v['imp_adelanto_vacac']) ? (float) $v['imp_adelanto_vacac'] : null,
+                isset($v['descuento_afp'])      ? (float) $v['descuento_afp']      : null,
+                $v['periodo_vac'] ?? null
             );
 
             return $this->success(
-                ['cod_corr_vac' => $codCorr, 'num_dias' => $dias],
+                ['cod_corr_sol' => $codCorrSol, 'num_dias' => $numDias],
                 'Solicitud registrada correctamente.',
                 201
             );
@@ -193,6 +210,43 @@ class ErpController extends BaseController
 
         try {
             $ok = $this->erpService->cancelarVac($dbName, $codErp, $codPersonal, $codCorrVac);
+
+            if (!$ok) {
+                return $this->error('No se puede cancelar en el estado actual.', 422);
+            }
+
+            return $this->success(null, 'Solicitud cancelada correctamente.');
+        } catch (QueryException $e) {
+            return $this->error('Error al cancelar: ' . $e->getMessage(), 500);
+        } catch (\RuntimeException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Solicitudes de vacaciones intranet del trabajador (PLA_SOL_VACACIONES).
+     */
+    public function solicitudesVac(Request $request): JsonResponse
+    {
+        [$dbName, $codPersonal] = $this->resolverContexto($request);
+
+        try {
+            $data = $this->erpService->getSolicitudesVac($dbName, $codPersonal);
+            return $this->success($data, 'Solicitudes obtenidas.');
+        } catch (QueryException $e) {
+            return $this->error('Error al consultar solicitudes: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Cancela una solicitud intranet (PE o AJ → CA) en PLA_SOL_VACACIONES.
+     */
+    public function cancelarSolVac(Request $request, string $codCorrSol): JsonResponse
+    {
+        [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+
+        try {
+            $ok = $this->erpService->cancelarSolVac($dbName, $codErp, $codPersonal, $codCorrSol);
 
             if (!$ok) {
                 return $this->error('No se puede cancelar en el estado actual.', 422);
@@ -301,14 +355,14 @@ class ErpController extends BaseController
 
     /**
      * Extrae db_name, cod_personal y cod_erp del usuario autenticado.
-     * cod_erp siempre es '0001' en todas las BDs del ERP.
+     * Siempre consulta empresa desde BD para evitar datos cacheados por Eloquent.
      *
      * @return array{0:string,1:string,2:string}
      */
     private function resolverContexto(Request $request): array
     {
         $user    = $request->user();
-        $empresa = $user->empresa;
+        $empresa = $user->empresa()->firstOrFail();
 
         return [
             $empresa->db_name,
