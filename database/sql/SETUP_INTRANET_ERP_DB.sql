@@ -34,7 +34,7 @@ BEGIN
             FEC_INICIO          DATE            NOT NULL,
             FEC_FINAL           DATE            NOT NULL,
             NUM_DIAS            INT             NOT NULL,
-            COD_PERSONAL_JEFE   VARCHAR(20)     NULL,
+            COD_PERSONAL_JEFE   VARCHAR(100)    NULL,   -- usuario (login intranet) del jefe
             IMP_ADELANTO_VACAC  DECIMAL(18,2)   NULL,
             DESCUENTO_AFP       DECIMAL(18,2)   NULL,
             PERIODO_VAC         VARCHAR(20)     NULL,
@@ -57,6 +57,21 @@ BEGIN
 END
 ELSE
     PRINT '  [--] Tabla PLA_SOL_VACACIONES ya existe.';
+GO
+
+-- ── Ampliar COD_PERSONAL_JEFE a VARCHAR(100) si la tabla ya existía con VARCHAR(20)
+-- Ahora guarda el 'usuario' (login intranet) del jefe, no el cod_personal del ERP.
+IF EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID('dbo.PLA_SOL_VACACIONES')
+      AND name      = 'COD_PERSONAL_JEFE'
+      AND max_length < 100
+)
+BEGIN
+    ALTER TABLE dbo.PLA_SOL_VACACIONES
+        ALTER COLUMN COD_PERSONAL_JEFE VARCHAR(100) NULL;
+    PRINT '  [OK] COD_PERSONAL_JEFE ampliado a VARCHAR(100).';
+END
 GO
 
 -- ============================================================================
@@ -469,6 +484,268 @@ PRINT '  [OK] SP_INTRANET_APROBAR_VAC creado.';
 GO
 
 -- ============================================================================
+-- PLA_PERSONAL — columnas de configuración de vacaciones (idempotente)
+-- ============================================================================
+
+-- IND_HABILITA_VACACIONES : controla si el trabajador puede solicitar vacaciones
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE  object_id = OBJECT_ID('dbo.PLA_PERSONAL')
+      AND  name      = 'IND_HABILITA_VACACIONES'
+)
+BEGIN
+    ALTER TABLE dbo.PLA_PERSONAL
+        ADD IND_HABILITA_VACACIONES CHAR(1) NOT NULL
+            CONSTRAINT DF_PERSONAL_IND_HAB_VAC DEFAULT 'N';
+    PRINT '  [OK] PLA_PERSONAL: columna IND_HABILITA_VACACIONES agregada (DEFAULT N).';
+END
+ELSE
+    PRINT '  [--] PLA_PERSONAL: IND_HABILITA_VACACIONES ya existe.';
+GO
+
+-- LIMITE_DIAS_VAC_ANIO : límite anual de días (NULL = sin límite, se resetea cada año)
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE  object_id = OBJECT_ID('dbo.PLA_PERSONAL')
+      AND  name      = 'LIMITE_DIAS_VAC_ANIO'
+)
+BEGIN
+    ALTER TABLE dbo.PLA_PERSONAL
+        ADD LIMITE_DIAS_VAC_ANIO INT NULL;
+    PRINT '  [OK] PLA_PERSONAL: columna LIMITE_DIAS_VAC_ANIO agregada (NULL = sin límite).';
+END
+ELSE
+    PRINT '  [--] PLA_PERSONAL: LIMITE_DIAS_VAC_ANIO ya existe.';
+GO
+
+-- ============================================================================
+-- SP_INTRANET_GET_CONFIG_VAC
+-- ============================================================================
+IF OBJECT_ID('dbo.SP_INTRANET_GET_CONFIG_VAC', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.SP_INTRANET_GET_CONFIG_VAC;
+GO
+
+CREATE PROCEDURE dbo.SP_INTRANET_GET_CONFIG_VAC
+    @cod_personal VARCHAR(20),
+    @ano          INT = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @ano IS NULL SET @ano = YEAR(GETDATE());
+
+    SELECT
+        ISNULL(p.IND_HABILITA_VACACIONES, 'N')    AS IND_HABILITA_VACACIONES,
+        p.LIMITE_DIAS_VAC_ANIO,
+        ISNULL((
+            SELECT SUM(sv.NUM_DIAS)
+            FROM   dbo.PLA_SOL_VACACIONES sv
+            WHERE  sv.COD_PERSONAL        = p.COD_PERSONAL
+              AND  sv.ANO_PROCESO         = @ano
+              AND  sv.ESTADO_APROBACION NOT IN ('RJ', 'RR', 'CA')
+        ), 0)                                       AS DIAS_USADOS_ANIO
+    FROM dbo.PLA_PERSONAL p
+    WHERE p.COD_PERSONAL = @cod_personal;
+END;
+GO
+PRINT '  [OK] SP_INTRANET_GET_CONFIG_VAC creado.';
+GO
+
+-- ============================================================================
+-- LOG_VISUALIZACION_BOLETA — tabla + columnas recomendadas (idempotente)
+-- ============================================================================
+
+IF OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.LOG_VISUALIZACION_BOLETA (
+        ID                   INT IDENTITY(1,1) NOT NULL,
+        COD_EMPRESA          VARCHAR(10)    NOT NULL,
+        COD_PERSONAL         VARCHAR(20)    NOT NULL,
+        COD_USUARIO          VARCHAR(100)   NOT NULL,
+        ANO_PROCESO          INT            NOT NULL,
+        MES_PROCESO          INT            NOT NULL,
+        TIP_BOLETA           VARCHAR(20)    NULL,
+        NOM_PERSONAL         VARCHAR(200)   NULL,
+        DNI                  VARCHAR(15)    NULL,
+        CARGO                VARCHAR(150)   NULL,
+        IMP_INGRESOS         DECIMAL(18,2)  NULL,
+        IMP_DESCUENTOS       DECIMAL(18,2)  NULL,
+        IMP_NETO             DECIMAL(18,2)  NULL,
+        FEC_VISUALIZACION    DATETIME       NOT NULL
+            CONSTRAINT DF_LOG_VIS_BOLETA_FECHA DEFAULT GETDATE(),
+        DES_IP               VARCHAR(45)    NULL,
+        DES_DISPOSITIVO      VARCHAR(150)   NULL,
+        DES_PLATAFORMA       VARCHAR(50)    NULL,
+        IND_FIRMA_CONFORME   CHAR(1)        NOT NULL
+            CONSTRAINT DF_LOG_VIS_BOLETA_FIRMA DEFAULT 'N',
+        FEC_FIRMA_CONFORME   DATETIME       NULL,
+        NOM_EMPRESA          VARCHAR(200)   NULL,
+        CORREO_TRABAJADOR    VARCHAR(200)   NULL,
+        EST_ENTREGA          VARCHAR(20)    NOT NULL
+            CONSTRAINT DF_LOG_VIS_BOLETA_EST DEFAULT 'ENTREGADA',
+        FEC_PUBLICACION      DATETIME       NULL,
+        CONSTRAINT PK_LOG_VISUALIZACION_BOLETA PRIMARY KEY (ID)
+    );
+    CREATE INDEX IX_LOG_VIS_BOLETA_PERSONAL_PERIODO
+        ON dbo.LOG_VISUALIZACION_BOLETA (COD_PERSONAL, ANO_PROCESO, MES_PROCESO);
+    PRINT '  [OK] LOG_VISUALIZACION_BOLETA creada con todas las columnas.';
+END
+ELSE
+BEGIN
+    -- Tabla ya existe: agregar columnas extra si faltan (upgrade idempotente)
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'NOM_PERSONAL')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD NOM_PERSONAL VARCHAR(200) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'DNI')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD DNI VARCHAR(15) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'CARGO')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD CARGO VARCHAR(150) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'IMP_INGRESOS')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD IMP_INGRESOS DECIMAL(18,2) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'IMP_DESCUENTOS')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD IMP_DESCUENTOS DECIMAL(18,2) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'IMP_NETO')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD IMP_NETO DECIMAL(18,2) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'DES_PLATAFORMA')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD DES_PLATAFORMA VARCHAR(50) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'IND_FIRMA_CONFORME')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA
+            ADD IND_FIRMA_CONFORME CHAR(1) NOT NULL
+                CONSTRAINT DF_LOG_VIS_BOLETA_FIRMA DEFAULT 'N';
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'FEC_FIRMA_CONFORME')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD FEC_FIRMA_CONFORME DATETIME NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'NOM_EMPRESA')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD NOM_EMPRESA VARCHAR(200) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'CORREO_TRABAJADOR')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD CORREO_TRABAJADOR VARCHAR(200) NULL;
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'EST_ENTREGA')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA
+            ADD EST_ENTREGA VARCHAR(20) NOT NULL
+                CONSTRAINT DF_LOG_VIS_BOLETA_EST DEFAULT 'ENTREGADA';
+    IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LOG_VISUALIZACION_BOLETA') AND name = 'FEC_PUBLICACION')
+        ALTER TABLE dbo.LOG_VISUALIZACION_BOLETA ADD FEC_PUBLICACION DATETIME NULL;
+    PRINT '  [--] LOG_VISUALIZACION_BOLETA ya existe — columnas extra verificadas.';
+END
+GO
+
+-- ── SP_INTRANET_REGISTRAR_VIS_BOLETA (con dedup: 1 registro por boleta/mes) ──
+IF OBJECT_ID('dbo.SP_INTRANET_REGISTRAR_VIS_BOLETA', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.SP_INTRANET_REGISTRAR_VIS_BOLETA;
+GO
+CREATE PROCEDURE dbo.SP_INTRANET_REGISTRAR_VIS_BOLETA
+    @COD_EMPRESA      VARCHAR(10),
+    @COD_PERSONAL     VARCHAR(20),
+    @COD_USUARIO      VARCHAR(100),
+    @ANO_PROCESO      INT,
+    @MES_PROCESO      INT,
+    @TIP_BOLETA       VARCHAR(20)    = 'REMUNERACION',
+    @NOM_PERSONAL     VARCHAR(200)   = NULL,
+    @DNI              VARCHAR(15)    = NULL,
+    @CARGO            VARCHAR(150)   = NULL,
+    @IMP_INGRESOS     DECIMAL(18,2)  = NULL,
+    @IMP_DESCUENTOS   DECIMAL(18,2)  = NULL,
+    @IMP_NETO         DECIMAL(18,2)  = NULL,
+    @DES_IP           VARCHAR(45)    = NULL,
+    @DES_DISPOSITIVO  VARCHAR(150)   = NULL,
+    @DES_PLATAFORMA    VARCHAR(50)    = 'WEB',
+    @NOM_EMPRESA       VARCHAR(200)   = NULL,
+    @CORREO_TRABAJADOR VARCHAR(200)   = NULL,
+    @ID_LOG            INT            = NULL OUTPUT,
+    @ES_PRIMERA_VEZ    BIT            = NULL OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @MES_PROCESO < 1 OR @MES_PROCESO > 12
+    BEGIN RAISERROR('MES_PROCESO debe estar entre 1 y 12.', 16, 1); RETURN; END
+
+    DECLARE @tip VARCHAR(20) = ISNULL(@TIP_BOLETA, 'REMUNERACION');
+
+    SELECT TOP 1 @ID_LOG = ID
+    FROM dbo.LOG_VISUALIZACION_BOLETA
+    WHERE COD_EMPRESA  = @COD_EMPRESA AND COD_PERSONAL = @COD_PERSONAL
+      AND ANO_PROCESO  = @ANO_PROCESO AND MES_PROCESO  = @MES_PROCESO
+      AND TIP_BOLETA   = @tip;
+
+    IF @ID_LOG IS NOT NULL
+        SET @ES_PRIMERA_VEZ = 0;
+    ELSE
+    BEGIN
+        INSERT INTO dbo.LOG_VISUALIZACION_BOLETA (
+            COD_EMPRESA, COD_PERSONAL, COD_USUARIO, ANO_PROCESO, MES_PROCESO,
+            TIP_BOLETA, NOM_PERSONAL, DNI, CARGO,
+            IMP_INGRESOS, IMP_DESCUENTOS, IMP_NETO,
+            FEC_VISUALIZACION, DES_IP, DES_DISPOSITIVO, DES_PLATAFORMA,
+            IND_FIRMA_CONFORME, NOM_EMPRESA, CORREO_TRABAJADOR, EST_ENTREGA
+        ) VALUES (
+            @COD_EMPRESA, @COD_PERSONAL, @COD_USUARIO, @ANO_PROCESO, @MES_PROCESO,
+            @tip, @NOM_PERSONAL, @DNI, @CARGO,
+            @IMP_INGRESOS, @IMP_DESCUENTOS, @IMP_NETO,
+            GETDATE(), @DES_IP, @DES_DISPOSITIVO, ISNULL(@DES_PLATAFORMA, 'WEB'),
+            'N', @NOM_EMPRESA, @CORREO_TRABAJADOR, 'ENTREGADA'
+        );
+        SET @ID_LOG         = SCOPE_IDENTITY();
+        SET @ES_PRIMERA_VEZ = 1;
+    END
+
+    SELECT @ID_LOG AS ID_LOG, @ES_PRIMERA_VEZ AS ES_PRIMERA_VEZ;
+END;
+GO
+PRINT '  [OK] SP_INTRANET_REGISTRAR_VIS_BOLETA creado (dedup: 1 registro/mes).';
+GO
+
+-- ── SP_INTRANET_GET_BOLETAS_VISTAS ────────────────────────────────────────────
+IF OBJECT_ID('dbo.SP_INTRANET_GET_BOLETAS_VISTAS', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.SP_INTRANET_GET_BOLETAS_VISTAS;
+GO
+CREATE PROCEDURE dbo.SP_INTRANET_GET_BOLETAS_VISTAS
+    @COD_PERSONAL VARCHAR(20),
+    @COD_EMPRESA  VARCHAR(10)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT
+        CAST(ANO_PROCESO AS VARCHAR(4))
+            + RIGHT('0' + CAST(MES_PROCESO AS VARCHAR(2)), 2) AS PERIODO,
+        ANO_PROCESO,
+        MES_PROCESO,
+        TIP_BOLETA,
+        FEC_VISUALIZACION AS FEC_PRIMERA_VIS,
+        IND_FIRMA_CONFORME,
+        EST_ENTREGA,
+        FEC_PUBLICACION,
+        NOM_EMPRESA,
+        CORREO_TRABAJADOR
+    FROM dbo.LOG_VISUALIZACION_BOLETA
+    WHERE COD_PERSONAL = @COD_PERSONAL
+      AND COD_EMPRESA  = @COD_EMPRESA
+    ORDER BY ANO_PROCESO DESC, MES_PROCESO DESC;
+END;
+GO
+PRINT '  [OK] SP_INTRANET_GET_BOLETAS_VISTAS creado.';
+GO
+
+-- ── SP_INTRANET_CONFIRMAR_BOLETA ──────────────────────────────────────────────
+IF OBJECT_ID('dbo.SP_INTRANET_CONFIRMAR_BOLETA', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.SP_INTRANET_CONFIRMAR_BOLETA;
+GO
+CREATE PROCEDURE dbo.SP_INTRANET_CONFIRMAR_BOLETA
+    @ID_LOG INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE dbo.LOG_VISUALIZACION_BOLETA
+    SET    IND_FIRMA_CONFORME = 'S',
+           FEC_FIRMA_CONFORME = GETDATE(),
+           EST_ENTREGA        = 'CONFORME'
+    WHERE  ID                 = @ID_LOG
+      AND  IND_FIRMA_CONFORME = 'N';
+    SELECT @@ROWCOUNT AS FILAS_AFECTADAS,
+           IND_FIRMA_CONFORME, FEC_FIRMA_CONFORME
+    FROM   dbo.LOG_VISUALIZACION_BOLETA WHERE ID = @ID_LOG;
+END;
+GO
+PRINT '  [OK] SP_INTRANET_CONFIRMAR_BOLETA creado.';
+GO
+
+-- ============================================================================
 -- RESUMEN FINAL
 -- ============================================================================
 PRINT '';
@@ -483,5 +760,20 @@ PRINT '   - SP_INTRANET_CREAR_SOL_VAC';
 PRINT '   - SP_INTRANET_CANCELAR_SOL_VAC';
 PRINT '   - SP_INTRANET_CANCELAR_VAC';
 PRINT '   - SP_INTRANET_APROBAR_VAC';
+PRINT '   - SP_INTRANET_GET_CONFIG_VAC';
+PRINT '   - SP_INTRANET_REGISTRAR_VIS_BOLETA (dedup: 1 registro/mes)';
+PRINT '   - SP_INTRANET_GET_BOLETAS_VISTAS';
+PRINT '   - SP_INTRANET_CONFIRMAR_BOLETA';
+PRINT ' Tablas adicionales:';
+PRINT '   - LOG_VISUALIZACION_BOLETA';
+PRINT ' Columnas agregadas en PLA_PERSONAL:';
+PRINT '   - IND_HABILITA_VACACIONES (CHAR 1, DEFAULT N)';
+PRINT '   - LIMITE_DIAS_VAC_ANIO (INT, NULL = sin límite)';
+PRINT ' Columnas en LOG_VISUALIZACION_BOLETA:';
+PRINT '   - NOM_PERSONAL, DNI, CARGO (snapshot trabajador)';
+PRINT '   - NOM_EMPRESA (desde intranet), CORREO_TRABAJADOR (desde intranet)';
+PRINT '   - IMP_INGRESOS, IMP_DESCUENTOS, IMP_NETO (snapshot boleta)';
+PRINT '   - DES_PLATAFORMA, IND_FIRMA_CONFORME, FEC_FIRMA_CONFORME';
+PRINT '   - EST_ENTREGA (ENTREGADA/CONFORME), FEC_PUBLICACION (admin)';
 PRINT '======================================================';
 GO

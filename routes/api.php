@@ -70,5 +70,12 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
         Route::get('/solicitudes-vac',                          [ErpController::class, 'solicitudesVac']);
         Route::post('/solicitudes-vac',                         [ErpController::class, 'crearSolicitudVac']);
         Route::patch('/solicitudes-vac/{codCorrSol}/cancelar',  [ErpController::class, 'cancelarSolVac']);
+
+        // Configuración de vacaciones del trabajador (habilitado + límite anual)
+        Route::get('/config-vac',                               [ErpController::class, 'configVac']);
+
+        // Registro de visualización de boletas (1 registro por boleta/mes)
+        Route::get('/boletas-vistas',                           [ErpController::class, 'boletasVistas']);
+        Route::post('/boletas-vistas',                          [ErpController::class, 'registrarVisBoleta']);
     });
 });

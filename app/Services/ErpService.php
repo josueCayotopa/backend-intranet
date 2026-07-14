@@ -268,6 +268,8 @@ class ErpService
                 'estado_label'      => $estadoInfo['label'],
                 'fec_actualiza'     => $fila->FEC_ACTUALIZA ?? null,
                 'imp_adelanto'      => $fila->IMP_ADELANTO_VACAC ? (float) $fila->IMP_ADELANTO_VACAC : null,
+                'descuento_afp'     => $fila->DESCUENTO_AFP      ? (float) $fila->DESCUENTO_AFP      : null,
+                'periodo_vac'       => $fila->PERIODO_VAC        ? trim($fila->PERIODO_VAC)           : null,
                 'cancelable'        => in_array($estado, ['PE', 'AJ']),
             ];
         }, $rows);
@@ -401,5 +403,127 @@ class ErpService
         );
 
         return $rows ? array_map(fn($r) => (array) $r, $rows) : null;
+    }
+
+    /**
+     * Registra la visualización de una boleta en LOG_VISUALIZACION_BOLETA
+     * vía SP_INTRANET_REGISTRAR_VIS_BOLETA (Pattern B).
+     * Devuelve el ID del log generado, o 0 si el SP no está instalado.
+     */
+    /**
+     * Lista de boletas ya visualizadas por el trabajador (para pre-cargar en el frontend).
+     * Devuelve array de { periodo, ano_proceso, mes_proceso, tip_boleta, fec_primera_vis, ind_firma_conforme }.
+     */
+    public function getBoletasVistas(string $dbName, string $codEmpresaErp, string $codPersonal): array
+    {
+        $rows = DB::select(
+            "EXEC [{$dbName}].dbo.SP_INTRANET_GET_BOLETAS_VISTAS @COD_PERSONAL = ?, @COD_EMPRESA = ?",
+            [$codPersonal, $codEmpresaErp]
+        );
+
+        return array_map(fn($r) => [
+            'periodo'            => $r->PERIODO,
+            'ano_proceso'        => (int) $r->ANO_PROCESO,
+            'mes_proceso'        => (int) $r->MES_PROCESO,
+            'tip_boleta'         => $r->TIP_BOLETA ?? 'REMUNERACION',
+            'fec_primera_vis'    => $r->FEC_PRIMERA_VIS,
+            'ind_firma_conforme' => $r->IND_FIRMA_CONFORME ?? 'N',
+        ], $rows);
+    }
+
+    /**
+     * Registra la primera visualización de una boleta (dedup en el SP).
+     * Si el período ya fue visto, devuelve el ID existente con primera_vez = false.
+     *
+     * @return array{id_log:int, primera_vez:bool}
+     */
+    public function registrarVisBoleta(
+        string  $dbName,
+        string  $codEmpresaErp,
+        string  $codPersonal,
+        string  $codUsuario,
+        int     $anoProceso,
+        int     $mesProceso,
+        string  $tipBoleta      = 'REMUNERACION',
+        ?string $nomPersonal    = null,
+        ?string $dni            = null,
+        ?string $cargo          = null,
+        ?float  $impIngresos    = null,
+        ?float  $impDescuentos  = null,
+        ?float  $impNeto        = null,
+        ?string $desIp            = null,
+        ?string $desDispositivo   = null,
+        string  $desPlataforma    = 'WEB',
+        ?string $nomEmpresa       = null,
+        ?string $correoTrabajador = null,
+    ): array {
+        $sql = "
+            DECLARE @id INT, @pv BIT;
+            EXEC [{$dbName}].dbo.SP_INTRANET_REGISTRAR_VIS_BOLETA
+                @COD_EMPRESA       = ?,
+                @COD_PERSONAL      = ?,
+                @COD_USUARIO       = ?,
+                @ANO_PROCESO       = ?,
+                @MES_PROCESO       = ?,
+                @TIP_BOLETA        = ?,
+                @NOM_PERSONAL      = ?,
+                @DNI               = ?,
+                @CARGO             = ?,
+                @IMP_INGRESOS      = ?,
+                @IMP_DESCUENTOS    = ?,
+                @IMP_NETO          = ?,
+                @DES_IP            = ?,
+                @DES_DISPOSITIVO   = ?,
+                @DES_PLATAFORMA    = ?,
+                @NOM_EMPRESA       = ?,
+                @CORREO_TRABAJADOR = ?,
+                @ID_LOG            = @id OUTPUT,
+                @ES_PRIMERA_VEZ    = @pv OUTPUT;
+            SELECT @id AS ID_LOG, @pv AS ES_PRIMERA_VEZ;
+        ";
+
+        $row = DB::selectOne($sql, [
+            $codEmpresaErp, $codPersonal, $codUsuario,
+            $anoProceso, $mesProceso, $tipBoleta,
+            $nomPersonal, $dni, $cargo,
+            $impIngresos, $impDescuentos, $impNeto,
+            $desIp,
+            $desDispositivo !== null ? substr($desDispositivo, 0, 150) : null,
+            $desPlataforma,
+            $nomEmpresa,
+            $correoTrabajador,
+        ]);
+
+        return [
+            'id_log'      => (int)  ($row->ID_LOG         ?? 0),
+            'primera_vez' => (bool) ($row->ES_PRIMERA_VEZ ?? false),
+        ];
+    }
+
+    /**
+     * Configuración de vacaciones del trabajador desde SP_INTRANET_GET_CONFIG_VAC.
+     * Devuelve habilitado (bool), limite_dias_anio (int|null) y dias_usados_anio (int).
+     *
+     * @return array{habilitado:bool, limite_dias_anio:int|null, dias_usados_anio:int}
+     */
+    public function getConfigVac(string $dbName, string $codPersonal): array
+    {
+        $rows = DB::select(
+            "EXEC [{$dbName}].dbo.SP_INTRANET_GET_CONFIG_VAC @cod_personal = ?, @ano = ?",
+            [$codPersonal, (int) date('Y')]
+        );
+
+        if (empty($rows)) {
+            return ['habilitado' => true, 'limite_dias_anio' => null, 'dias_usados_anio' => 0];
+        }
+
+        $row = $rows[0];
+        return [
+            'habilitado'       => ($row->IND_HABILITA_VACACIONES ?? 'N') === 'S',
+            'limite_dias_anio' => ($row->LIMITE_DIAS_VAC_ANIO ?? null) !== null
+                ? (int) $row->LIMITE_DIAS_VAC_ANIO
+                : null,
+            'dias_usados_anio' => (int) ($row->DIAS_USADOS_ANIO ?? 0),
+        ];
     }
 }

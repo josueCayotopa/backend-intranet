@@ -102,7 +102,6 @@ class ErpController extends BaseController
                 'mes_proceso'        => 'required|integer|min:1|max:12',
                 'fec_inicio'         => 'required|date',
                 'fec_final'          => 'required|date|after_or_equal:fec_inicio',
-                'cod_personal_jefe'  => 'nullable|string|max:10',
                 'imp_adelanto_vacac' => 'nullable|numeric|min:0',
                 'descuento_afp'      => 'nullable|numeric|min:0',
                 'periodo_vac'        => 'nullable|string|max:100',
@@ -112,9 +111,38 @@ class ErpController extends BaseController
         }
 
         [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
-        $codUserActual = $request->user()->usuario ?? $codPersonal;
+        $user          = $request->user();
+        $codUserActual = $user->usuario ?? $codPersonal;
+
+        // El jefe se lee del perfil del usuario autenticado.
+        // cod_personal_jefe almacena el 'usuario' (login intranet) del jefe,
+        // no el cod_personal del ERP, para que sea consistente entre bases de datos.
+        $codPersonalJefe = $user->cod_personal_jefe ?? null;
 
         $numDias = (int) ((strtotime($v['fec_final']) - strtotime($v['fec_inicio'])) / 86400) + 1;
+
+        // Verificar habilitación y límite anual antes de insertar
+        try {
+            $config = $this->erpService->getConfigVac($dbName, $codPersonal);
+            if (!$config['habilitado']) {
+                return $this->error(
+                    'No tienes habilitadas las solicitudes de vacaciones. Contacta a RRHH.',
+                    403
+                );
+            }
+            if ($config['limite_dias_anio'] !== null) {
+                $disponibles = max(0, $config['limite_dias_anio'] - $config['dias_usados_anio']);
+                if ($numDias > $disponibles) {
+                    return $this->error(
+                        "Excedes el límite anual de {$config['limite_dias_anio']} días. "
+                        . "Días disponibles este año: {$disponibles}.",
+                        422
+                    );
+                }
+            }
+        } catch (QueryException) {
+            // SP no instalado aún — omitir la validación
+        }
 
         try {
             $codCorrSol = $this->erpService->crearSolicitudVac(
@@ -127,7 +155,7 @@ class ErpController extends BaseController
                 $v['fec_inicio'],
                 $v['fec_final'],
                 $codUserActual,
-                $v['cod_personal_jefe']  ?? null,
+                $codPersonalJefe,
                 isset($v['imp_adelanto_vacac']) ? (float) $v['imp_adelanto_vacac'] : null,
                 isset($v['descuento_afp'])      ? (float) $v['descuento_afp']      : null,
                 $v['periodo_vac'] ?? null
@@ -323,6 +351,95 @@ class ErpController extends BaseController
         } catch (QueryException $e) {
             return $this->error('Error al consultar el ERP: ' . $e->getMessage(), 500);
         }
+    }
+
+    /**
+     * Lista de períodos de boleta ya visualizados por el trabajador.
+     * El frontend usa este dato para saber si mostrar el modal de "primera vez".
+     */
+    public function boletasVistas(Request $request): JsonResponse
+    {
+        [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+
+        try {
+            $data = $this->erpService->getBoletasVistas($dbName, $codErp, $codPersonal);
+            return $this->success($data, 'Boletas vistas obtenidas.');
+        } catch (QueryException) {
+            // SP no instalado — responder vacío, no bloquear
+            return $this->success([], 'Sin registros de visualización.');
+        }
+    }
+
+    /**
+     * Registra (o confirma) la primera visualización de una boleta.
+     * Deduplicado en el SP: si el período ya fue visto, devuelve el registro
+     * existente sin insertar uno nuevo.
+     * Body: { periodo: "202507", (opcional) imp_ingresos, imp_descuentos, imp_neto,
+     *          nom_personal, dni, cargo }
+     */
+    public function registrarVisBoleta(Request $request): JsonResponse
+    {
+        try {
+            $v = $request->validate([
+                'periodo'       => 'required|string|regex:/^\d{6}$/',
+                'nom_personal'  => 'nullable|string|max:200',
+                'dni'           => 'nullable|string|max:15',
+                'cargo'         => 'nullable|string|max:150',
+                'imp_ingresos'  => 'nullable|numeric|min:0',
+                'imp_descuentos'=> 'nullable|numeric|min:0',
+                'imp_neto'      => 'nullable|numeric',
+            ]);
+        } catch (ValidationException $e) {
+            return $this->error('Datos inválidos.', 422, $e->errors());
+        }
+
+        [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+        $user    = $request->user();
+        $empresa = $user->empresa()->firstOrFail();
+
+        try {
+            $result = $this->erpService->registrarVisBoleta(
+                dbName:           $dbName,
+                codEmpresaErp:    $codErp,
+                codPersonal:      $codPersonal,
+                codUsuario:       $user->usuario ?? $codPersonal,
+                anoProceso:       (int) substr($v['periodo'], 0, 4),
+                mesProceso:       (int) substr($v['periodo'], 4, 2),
+                tipBoleta:        'REMUNERACION',
+                nomPersonal:      $v['nom_personal']   ?? null,
+                dni:              $v['dni']            ?? null,
+                cargo:            $v['cargo']          ?? null,
+                impIngresos:      isset($v['imp_ingresos'])   ? (float) $v['imp_ingresos']   : null,
+                impDescuentos:    isset($v['imp_descuentos']) ? (float) $v['imp_descuentos'] : null,
+                impNeto:          isset($v['imp_neto'])       ? (float) $v['imp_neto']       : null,
+                desIp:            $request->ip(),
+                desDispositivo:   $request->userAgent(),
+                desPlataforma:    'WEB',
+                nomEmpresa:       $empresa->nombre ?? null,
+                correoTrabajador: $user->email ?? null,
+            );
+            return $this->success($result, $result['primera_vez'] ? 'Visualización registrada.' : 'Ya registrada anteriormente.');
+        } catch (QueryException $e) {
+            return $this->error('Error al registrar: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Configuración de vacaciones del trabajador autenticado.
+     * Devuelve habilitado (bool), limite_dias_anio (int|null), dias_usados_anio (int).
+     * Si el SP no está instalado aún, responde con valores permisivos por defecto.
+     */
+    public function configVac(Request $request): JsonResponse
+    {
+        [$dbName, $codPersonal] = $this->resolverContexto($request);
+
+        try {
+            $config = $this->erpService->getConfigVac($dbName, $codPersonal);
+        } catch (QueryException) {
+            $config = ['habilitado' => true, 'limite_dias_anio' => null, 'dias_usados_anio' => 0];
+        }
+
+        return $this->success($config, 'Configuración de vacaciones obtenida.');
     }
 
     /**
