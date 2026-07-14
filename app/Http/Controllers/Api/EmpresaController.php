@@ -39,6 +39,7 @@ class EmpresaController extends BaseController
                 'codigo'      => 'required|string|max:20|unique:EMPRESAS,codigo',
                 'nombre'      => 'required|string|max:200',
                 'ruc'         => 'required|string|size:11|unique:EMPRESAS,ruc',
+                'cod_erp'     => 'nullable|string|max:20',
                 'logo_url'    => 'nullable|url|max:500',
                 'db_host'     => 'required|string|max:100',
                 'db_port'     => 'required|integer|between:1,65535',
@@ -74,6 +75,7 @@ class EmpresaController extends BaseController
                 'codigo'      => "string|max:20|unique:EMPRESAS,codigo,{$id}",
                 'nombre'      => 'string|max:200',
                 'ruc'         => "string|size:11|unique:EMPRESAS,ruc,{$id}",
+                'cod_erp'     => 'nullable|string|max:20',
                 'logo_url'    => 'nullable|url|max:500',
                 'db_host'     => 'string|max:100',
                 'db_port'     => 'integer|between:1,65535',
@@ -136,6 +138,41 @@ class EmpresaController extends BaseController
             return $this->error('No se pudieron descifrar las credenciales almacenadas.', 500);
         } catch (\RuntimeException $e) {
             return $this->error($e->getMessage(), 400);
+        }
+    }
+
+    /**
+     * Sube o reemplaza el logo de una empresa.
+     * Guarda en storage/app/public/logos-empresa/ y actualiza logo_url.
+     */
+    public function subirLogo(Request $request, int $id): JsonResponse
+    {
+        try {
+            $request->validate([
+                'logo' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048',
+            ]);
+        } catch (ValidationException $e) {
+            return $this->error('Archivo inválido.', 422, $e->errors());
+        }
+
+        try {
+            $empresa = \App\Models\Empresa::findOrFail($id);
+
+            if ($empresa->logo_url) {
+                $pathAnterior = preg_replace('#^.*/storage/#', 'public/', $empresa->logo_url);
+                \Illuminate\Support\Facades\Storage::delete($pathAnterior);
+            }
+
+            $path    = $request->file('logo')->store('logos-empresa', 'public');
+            $logoUrl = url('storage/' . $path);
+
+            $empresa->update(['logo_url' => $logoUrl]);
+
+            return $this->success(['logo_url' => $logoUrl], 'Logo actualizado.');
+        } catch (ModelNotFoundException) {
+            return $this->error('Empresa no encontrada.', 404);
+        } catch (\Exception $e) {
+            return $this->error('Error al subir el logo: ' . $e->getMessage(), 500);
         }
     }
 }

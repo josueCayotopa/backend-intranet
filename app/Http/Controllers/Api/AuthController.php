@@ -155,6 +155,40 @@ class AuthController extends BaseController
     }
 
     /**
+     * Sube o reemplaza la firma digital del usuario autenticado.
+     * Guarda en storage/app/public/firmas-perfil/ y actualiza firma_url.
+     */
+    public function subirFirma(Request $request): JsonResponse
+    {
+        try {
+            $request->validate([
+                'firma' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->error('Archivo inválido.', 422, $e->errors());
+        }
+
+        try {
+            $user = $request->user();
+
+            // Borrar firma anterior si existe
+            if ($user->firma_url) {
+                $pathAnterior = preg_replace('#^.*/storage/#', 'public/', $user->firma_url);
+                \Illuminate\Support\Facades\Storage::delete($pathAnterior);
+            }
+
+            $path     = $request->file('firma')->store('firmas-perfil', 'public');
+            $firmaUrl = url('storage/' . $path);
+
+            $user->update(['firma_url' => $firmaUrl]);
+
+            return $this->success(['firma_url' => $firmaUrl], 'Firma actualizada.');
+        } catch (\Exception $e) {
+            return $this->error('Error al subir la firma: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
      * Restablece la contraseña de un usuario a su DNI (flujo público, sin autenticación).
      * Activa debe_cambiar_password para forzar cambio al siguiente ingreso.
      */

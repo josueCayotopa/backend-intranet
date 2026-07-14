@@ -248,6 +248,7 @@ class AuthService
             'cod_personal_jefe'     => $user->cod_personal_jefe,
             'dni'                   => $user->dni,
             'foto_url'              => $user->foto_url,
+            'firma_url'             => $user->firma_url,
             'rol'                   => $user->rol ?? 'EMPLEADO',
             'debe_cambiar_password' => (bool) $user->debe_cambiar_password,
         ];

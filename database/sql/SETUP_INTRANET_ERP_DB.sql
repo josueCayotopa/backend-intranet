@@ -322,15 +322,17 @@ BEGIN
           AND  COD_PERSONAL      = @cod_personal
           AND  COD_CORR_SOL      = @cod_corr_sol
           AND  ESTADO_APROBACION IN ('PE', 'AJ')
+          AND  TIP_VACACIONES    = 'VC'
     )
     BEGIN
-        RAISERROR('La solicitud no se puede cancelar en su estado actual.', 16, 1); RETURN;
+        RAISERROR('La solicitud no se puede cancelar: solo las compras de vacaciones (VC) son anulables.', 16, 1); RETURN;
     END
     UPDATE dbo.PLA_SOL_VACACIONES
     SET    ESTADO_APROBACION = 'CA', FEC_ACTUALIZA = GETDATE()
     WHERE  COD_EMPRESA  = @cod_empresa
       AND  COD_PERSONAL = @cod_personal
-      AND  COD_CORR_SOL = @cod_corr_sol;
+      AND  COD_CORR_SOL = @cod_corr_sol
+      AND  TIP_VACACIONES = 'VC';
     SELECT @@ROWCOUNT AS FILAS_AFECTADAS;
 END;
 GO

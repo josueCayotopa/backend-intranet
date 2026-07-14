@@ -15,7 +15,7 @@ class EmpresaService
     public function listar(bool $soloActivas = false): array
     {
         $query = DB::table('EMPRESAS')
-            ->select('id', 'codigo', 'nombre', 'ruc', 'logo_url', 'activo', 'created_at', 'updated_at');
+            ->select('id', 'codigo', 'nombre', 'ruc', 'cod_erp', 'logo_url', 'activo', 'created_at', 'updated_at');
 
         if ($soloActivas) {
             $query->where('activo', 1);

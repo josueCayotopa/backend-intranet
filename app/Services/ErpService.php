@@ -270,7 +270,7 @@ class ErpService
                 'imp_adelanto'      => $fila->IMP_ADELANTO_VACAC ? (float) $fila->IMP_ADELANTO_VACAC : null,
                 'descuento_afp'     => $fila->DESCUENTO_AFP      ? (float) $fila->DESCUENTO_AFP      : null,
                 'periodo_vac'       => $fila->PERIODO_VAC        ? trim($fila->PERIODO_VAC)           : null,
-                'cancelable'        => in_array($estado, ['PE', 'AJ']),
+                'cancelable'        => in_array($estado, ['PE', 'AJ']) && trim($fila->TIP_VACACIONES ?? '') === 'VC',
             ];
         }, $rows);
     }

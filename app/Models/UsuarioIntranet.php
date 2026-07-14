@@ -24,6 +24,7 @@ class UsuarioIntranet extends Authenticatable
         'usuario',
         'password_hash',
         'foto_url',
+        'firma_url',
         'rol',
         'activo',
         'debe_cambiar_password',

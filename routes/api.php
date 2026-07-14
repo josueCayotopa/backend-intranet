@@ -32,16 +32,18 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
         Route::post('/ping',                [AuthController::class, 'ping']);
         Route::post('/cambiar-password',    [AuthController::class, 'cambiarPassword']);
         Route::post('/foto',                [AuthController::class, 'subirFoto']);
+        Route::post('/firma',               [AuthController::class, 'subirFirma']);
         Route::get('/sesiones',             [AuthController::class, 'sesiones']);
         Route::delete('/sesiones/{id}',     [AuthController::class, 'cerrarSesion']);
     });
 
-    // Empresas (administración)
-    Route::prefix('empresas')->group(function () {
+    // Empresas (administración) — solo ADMIN
+    Route::middleware(EnsureAdmin::class)->prefix('empresas')->group(function () {
         Route::post('/',                         [EmpresaController::class, 'store']);
         Route::put('/{id}',                      [EmpresaController::class, 'update']);
         Route::patch('/{id}/toggle-activo',      [EmpresaController::class, 'toggleActivo']);
         Route::get('/{id}/probar-conexion',      [EmpresaController::class, 'probarConexion']);
+        Route::post('/{id}/logo',                [EmpresaController::class, 'subirLogo']);
     });
 
     // Usuarios de la intranet — solo ADMIN

@@ -58,6 +58,21 @@ class UserService
             });
         }
 
+        // por_pagina=todos → sin paginar (usado por combos que necesitan la lista completa, ej. selector de jefe)
+        if (($filters['por_pagina'] ?? null) === 'todos') {
+            $items = $query->orderBy('u.usuario')->get();
+
+            return [
+                'items' => $items,
+                'meta'  => [
+                    'total'         => $items->count(),
+                    'pagina'        => 1,
+                    'por_pagina'    => $items->count(),
+                    'ultima_pagina' => 1,
+                ],
+            ];
+        }
+
         $porPagina = max(1, min(200, (int) ($filters['por_pagina'] ?? 15)));
         $pagina    = max(1, (int) ($filters['pagina'] ?? 1));
 

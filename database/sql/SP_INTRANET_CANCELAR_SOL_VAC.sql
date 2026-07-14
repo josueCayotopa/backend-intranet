@@ -4,6 +4,8 @@
 -- PATRÓN:        B — el SP vive en la BD de la empresa; Laravel lo llama
 --                como EXEC [db_name].dbo.SP_INTRANET_CANCELAR_SOL_VAC
 -- Cancela una solicitud intranet en PLA_SOL_VACACIONES (solo si PE o AJ).
+-- Solo aplica a TIP_VACACIONES = 'VC' (Compra de Vacaciones); las demás
+-- (VG, etc.) no son anulables desde la intranet.
 -- ============================================================================
 -- USE BDV0004;  -- cambiar por la BD destino
 -- GO
@@ -28,9 +30,10 @@ BEGIN
           AND  COD_PERSONAL       = @cod_personal
           AND  COD_CORR_SOL       = @cod_corr_sol
           AND  ESTADO_APROBACION  IN ('PE', 'AJ')
+          AND  TIP_VACACIONES     = 'VC'
     )
     BEGIN
-        RAISERROR('La solicitud no se puede cancelar en su estado actual.', 16, 1);
+        RAISERROR('La solicitud no se puede cancelar: solo las compras de vacaciones (VC) son anulables.', 16, 1);
         RETURN;
     END
 
@@ -39,7 +42,8 @@ BEGIN
            FEC_ACTUALIZA     = GETDATE()
     WHERE  COD_EMPRESA   = @cod_empresa
       AND  COD_PERSONAL  = @cod_personal
-      AND  COD_CORR_SOL  = @cod_corr_sol;
+      AND  COD_CORR_SOL  = @cod_corr_sol
+      AND  TIP_VACACIONES = 'VC';
 
     SELECT @@ROWCOUNT AS FILAS_AFECTADAS;
 END;
