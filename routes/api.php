@@ -65,6 +65,7 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
 
         // Vacaciones procesadas — lectura de PLA_VACACIONES_MES_CAB (registradas por RRHH)
         Route::get('/vacaciones',                               [ErpController::class, 'vacaciones']);
+        Route::get('/vacaciones-consolidado',                   [ErpController::class, 'vacacionesConsolidado']);
         Route::patch('/vacaciones/{codCorrVac}/aprobar',        [ErpController::class, 'aprobarVac']);
         Route::patch('/vacaciones/{codCorrVac}/cancelar',       [ErpController::class, 'cancelarVac']);
 

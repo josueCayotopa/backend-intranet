@@ -354,6 +354,27 @@ class ErpController extends BaseController
     }
 
     /**
+     * Vacaciones acumuladas del trabajador considerando TODAS las empresas
+     * del corporativo (soporte para personal que pasó de una razón social a
+     * otra dentro del grupo). Suma el bloque de días ganados por empresa.
+     */
+    public function vacacionesConsolidado(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (empty($user->dni)) {
+            return $this->error('El usuario no tiene DNI registrado.', 422);
+        }
+
+        try {
+            $data = $this->erpService->getVacacionesConsolidado($user->dni);
+            return $this->success($data, 'Vacaciones consolidadas obtenidas.');
+        } catch (QueryException $e) {
+            return $this->error('Error al consultar el ERP: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
      * Lista de períodos de boleta ya visualizados por el trabajador.
      * El frontend usa este dato para saber si mostrar el modal de "primera vez".
      */

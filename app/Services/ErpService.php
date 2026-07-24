@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Empresa;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -222,6 +223,102 @@ class ErpService
             'dias_pendientes'   => (int) ($primera->DIAS_PENDIENTES   ?? 0),
             'historial'         => $historial,
         ];
+    }
+
+    /**
+     * Vacaciones acumuladas de un trabajador considerando TODAS las empresas
+     * del corporativo en las que trabajó (personal que pasó de una razón
+     * social a otra dentro del grupo). Por cada empresa se calcula un bloque
+     * independiente (años completos en esa empresa × 30 días - días gozados
+     * ahí) y se suman los bloques — así el saldo no queda negativo cuando el
+     * historial de una empresa antigua se procesó en planilla y el cálculo
+     * de "años cumplidos" solo miraba la empresa actual.
+     *
+     * Recorre EMPRESAS activas de la intranet (no una lista fija de BDs) y
+     * usa SP_INTRANET_GET_VACACIONES_GRUPO (busca por DNI, incluye cesados)
+     * en cada una. Si el SP aún no está instalado en alguna BD, esa empresa
+     * simplemente se omite del consolidado (no bloquea la respuesta).
+     */
+    public function getVacacionesConsolidado(string $dni): array
+    {
+        $empresasGrupo = Empresa::activas()->get(['db_name', 'nombre', 'codigo']);
+
+        $detalle = [];
+
+        foreach ($empresasGrupo as $empresaGrupo) {
+            try {
+                $rows = DB::select(
+                    "EXEC [{$empresaGrupo->db_name}].dbo.SP_INTRANET_GET_VACACIONES_GRUPO @num_doc_identidad = ?",
+                    [$dni]
+                );
+            } catch (\Exception $e) {
+                Log::warning('[ERP] getVacacionesConsolidado: SP no disponible en esta BD', [
+                    'db_name' => $empresaGrupo->db_name,
+                    'error'   => $e->getMessage(),
+                ]);
+                continue;
+            }
+
+            foreach ($rows as $fila) {
+                $activo   = ($fila->TIP_ESTADO ?? 'AC') === 'AC';
+                $fechaFin = $activo ? null : ($fila->FEC_CESADO ?? null);
+                $anios    = $this->aniosCompletos($fila->FEC_INGRESO, $fechaFin);
+
+                $diasAcumulados = $anios * 30;
+                $diasGozados    = (int) ($fila->DIAS_GOZADOS_TOTAL ?? 0);
+
+                $detalle[] = [
+                    'empresa'         => $empresaGrupo->nombre,
+                    'cod_personal'    => trim($fila->COD_PERSONAL ?? ''),
+                    'activo'          => $activo,
+                    'fecha_ingreso'   => $fila->FEC_INGRESO ?? '',
+                    'fecha_cesado'    => $fila->FEC_CESADO ?? null,
+                    'anios_completos' => $anios,
+                    'dias_acumulados' => $diasAcumulados,
+                    'dias_gozados'    => $diasGozados,
+                    'dias_pendientes' => (int) ($fila->DIAS_PENDIENTES ?? 0),
+                    'saldo'           => $diasAcumulados - $diasGozados,
+                ];
+            }
+        }
+
+        $totalAcumulado = array_sum(array_column($detalle, 'dias_acumulados'));
+        $totalGozado    = array_sum(array_column($detalle, 'dias_gozados'));
+        $totalPendiente = array_sum(array_column($detalle, 'dias_pendientes'));
+
+        return [
+            'empresas'        => $detalle,
+            'multi_empresa'   => count($detalle) > 1,
+            'dias_acumulados' => $totalAcumulado,
+            'dias_gozados'    => $totalGozado,
+            'dias_pendientes' => $totalPendiente,
+            'saldo'           => $totalAcumulado - $totalGozado,
+        ];
+    }
+
+    /**
+     * Años completos cumplidos entre $fechaIngreso y $fechaFin (o hoy si es
+     * null). Misma regla que el frontend: solo cuenta un año al cumplirse el
+     * aniversario completo, sin prorrateo del año en curso.
+     */
+    private function aniosCompletos(?string $fechaIngreso, ?string $fechaFin): int
+    {
+        if (empty($fechaIngreso)) {
+            return 0;
+        }
+
+        try {
+            $ingreso = new \DateTime($fechaIngreso);
+            $fin     = $fechaFin ? new \DateTime($fechaFin) : new \DateTime();
+        } catch (\Exception) {
+            return 0;
+        }
+
+        if ($fin < $ingreso) {
+            return 0;
+        }
+
+        return $ingreso->diff($fin)->y;
     }
 
     /**

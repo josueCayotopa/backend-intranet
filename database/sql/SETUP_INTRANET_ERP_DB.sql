@@ -191,6 +191,51 @@ PRINT '  [OK] SP_INTRANET_GET_VACACIONES creado.';
 GO
 
 -- ============================================================================
+-- 3B. SP_INTRANET_GET_VACACIONES_GRUPO
+-- Soporte para personal que trabajó en más de una empresa del corporativo:
+-- busca por DNI (no por cod_personal) y NO filtra TIP_ESTADO, para poder
+-- recuperar también el bloque de vacaciones de una empresa donde ya cesó.
+-- ============================================================================
+IF OBJECT_ID('dbo.SP_INTRANET_GET_VACACIONES_GRUPO', 'P') IS NOT NULL
+    DROP PROCEDURE dbo.SP_INTRANET_GET_VACACIONES_GRUPO;
+GO
+CREATE PROCEDURE dbo.SP_INTRANET_GET_VACACIONES_GRUPO
+    @num_doc_identidad VARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT
+        P.COD_PERSONAL,
+        P.APE_PATERNO + ' ' + P.APE_MATERNO + ', ' + P.NOM_TRABAJADOR AS NOMBRE_COMPLETO,
+        A.NUM_DOC_IDENTIDAD,
+        E.DES_NOMBRE_COMERCIAL   AS EMPRESA,
+        P.TIP_ESTADO,
+        P.FEC_INGRESO,
+        P.FEC_CESADO,
+        ISNULL((
+            SELECT SUM(C2.NUM_TOT_DIAS)
+            FROM   dbo.PLA_VACACIONES_MES_CAB C2
+            WHERE  C2.COD_EMPRESA  = P.COD_EMPRESA
+              AND  C2.COD_PERSONAL = P.COD_PERSONAL
+        ), 0) AS DIAS_GOZADOS_TOTAL,
+        ISNULL((
+            SELECT SUM(V3.NUM_DIAS)
+            FROM   dbo.PLA_VACACIONES_MES V3
+            WHERE  V3.COD_EMPRESA       = P.COD_EMPRESA
+              AND  V3.COD_PERSONAL      = P.COD_PERSONAL
+              AND  V3.ESTADO_APROBACION IN ('PE', 'AJ')
+        ), 0) AS DIAS_PENDIENTES
+    FROM       dbo.PLA_PERSONAL   P
+    INNER JOIN dbo.MAE_AUXILIAR   A   ON  A.COD_AUXILIAR = P.COD_AUXILIAR
+    INNER JOIN dbo.MAE_EMPRESAS   E   ON  E.COD_EMPRESA  = P.COD_EMPRESA
+    WHERE  A.NUM_DOC_IDENTIDAD  = @num_doc_identidad
+      AND  P.COD_TIPO_PLANILLA  = '01';
+END;
+GO
+PRINT '  [OK] SP_INTRANET_GET_VACACIONES_GRUPO creado.';
+GO
+
+-- ============================================================================
 -- 4. SP_INTRANET_GET_SOLICITUDES_VAC
 -- ============================================================================
 IF OBJECT_ID('dbo.SP_INTRANET_GET_SOLICITUDES_VAC', 'P') IS NOT NULL
