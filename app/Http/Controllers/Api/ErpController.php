@@ -318,7 +318,7 @@ class ErpController extends BaseController
             return $this->error('Periodo inválido. Formato esperado: AAAAMM (ej: 202501).', 422, $e->errors());
         }
 
-        [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+        [$dbName, $codPersonal, $codErp, $logoUrl] = $this->resolverContexto($request);
 
         try {
             $data = $this->erpService->getBoleta($dbName, $codErp, $codPersonal, $validated['periodo']);
@@ -326,6 +326,8 @@ class ErpController extends BaseController
             if ($data === null) {
                 return $this->error('No se encontró boleta para el período indicado.', 404);
             }
+
+            $data['cabecera']['logo_url'] = $logoUrl;
 
             return $this->success($data, 'Boleta obtenida correctamente.');
         } catch (QueryException $e) {
@@ -506,6 +508,7 @@ class ErpController extends BaseController
             $empresa->db_name,
             $user->cod_personal,
             $empresa->cod_erp ?? '0001',
+            $empresa->logo_url,
         ];
     }
 }
