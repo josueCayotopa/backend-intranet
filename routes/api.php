@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmpresaController;
+use App\Http\Controllers\Api\EquipoController;
 use App\Http\Controllers\Api\ErpController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Middleware\CheckSessionActivity;
@@ -80,5 +81,24 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
         // Registro de visualización de boletas (1 registro por boleta/mes)
         Route::get('/boletas-vistas',                           [ErpController::class, 'boletasVistas']);
         Route::post('/boletas-vistas',                          [ErpController::class, 'registrarVisBoleta']);
+    });
+
+    // Evaluar a mi personal — el jefe califica su sección (SP_RRHH_JEFE_* del hub)
+    Route::prefix('equipo')->group(function () {
+        Route::get('/resumen',                                            [EquipoController::class, 'resumen']);
+        Route::get('/evaluaciones',                                       [EquipoController::class, 'index']);
+        Route::get('/evaluaciones/{empresa}/{codPersonal}',               [EquipoController::class, 'show']);
+        Route::put('/evaluaciones/{empresa}/{codPersonal}/{periodo}',     [EquipoController::class, 'guardar']);
+
+        // Aprobar evaluaciones — el aprobador asignado (users.usuario = login) decide
+        Route::get('/aprobaciones',                                       [EquipoController::class, 'aprobaciones']);
+        Route::get('/aprobaciones/{empresa}/{codPersonal}/{periodo}',     [EquipoController::class, 'aprobacion']);
+        Route::post('/aprobaciones/{empresa}/{aprobacionId}',             [EquipoController::class, 'resolverAprobacion'])
+            ->whereNumber('aprobacionId');
+
+        // Aprobar vacaciones — el jefe aprueba/rechaza las solicitudes de su personal (SP_RRHH_JEFE_SOL_VAC_*)
+        Route::get('/vacaciones',                                         [EquipoController::class, 'vacaciones']);
+        Route::post('/vacaciones/{empresa}/{codPersonal}/{codCorrSol}/{accion}', [EquipoController::class, 'resolverVacaciones'])
+            ->whereIn('accion', ['aprobar', 'rechazar']);
     });
 });
