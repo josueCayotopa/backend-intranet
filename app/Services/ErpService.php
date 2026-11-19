@@ -598,6 +598,41 @@ class ErpService
     }
 
     /**
+     * Conformidad de la boleta (SP_INTRANET_CONFIRMAR_BOLETA). El SP solo recibe
+     * el ID del registro y no valida a quién pertenece, por eso el ID se busca
+     * aquí con el trabajador de la sesión y el período: nadie puede marcar la
+     * boleta de otro. Exige que la boleta ya se haya visto (registro existente).
+     *
+     * @return array{ind_firma_conforme:string, fec_firma_conforme:?string}|null  null = no la ha visto
+     */
+    public function confirmarBoleta(
+        string $dbName,
+        string $codEmpresaErp,
+        string $codPersonal,
+        int    $anoProceso,
+        int    $mesProceso,
+        string $tipBoleta = 'REMUNERACION',
+    ): ?array {
+        $log = DB::selectOne(
+            "SELECT TOP 1 ID FROM [{$dbName}].dbo.LOG_VISUALIZACION_BOLETA
+              WHERE COD_EMPRESA = ? AND COD_PERSONAL = ? AND ANO_PROCESO = ? AND MES_PROCESO = ?
+                AND ISNULL(TIP_BOLETA, 'REMUNERACION') = ?
+              ORDER BY ID",
+            [$codEmpresaErp, $codPersonal, $anoProceso, $mesProceso, $tipBoleta]
+        );
+        if (!$log) {
+            return null;
+        }
+
+        $row = DB::selectOne("EXEC [{$dbName}].dbo.SP_INTRANET_CONFIRMAR_BOLETA @ID_LOG = ?", [(int) $log->ID]);
+
+        return [
+            'ind_firma_conforme' => $row->IND_FIRMA_CONFORME ?? 'S',
+            'fec_firma_conforme' => $row->FEC_FIRMA_CONFORME ?? null,
+        ];
+    }
+
+    /**
      * Configuración de vacaciones del trabajador desde SP_INTRANET_GET_CONFIG_VAC.
      * Devuelve habilitado (bool), limite_dias_anio (int|null) y dias_usados_anio (int).
      *

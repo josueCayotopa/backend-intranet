@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\EmpresaController;
 use App\Http\Controllers\Api\EquipoController;
+use App\Http\Controllers\Api\PermisoController;
 use App\Http\Controllers\Api\ErpController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Middleware\CheckSessionActivity;
@@ -81,6 +82,7 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
         // Registro de visualización de boletas (1 registro por boleta/mes)
         Route::get('/boletas-vistas',                           [ErpController::class, 'boletasVistas']);
         Route::post('/boletas-vistas',                          [ErpController::class, 'registrarVisBoleta']);
+        Route::post('/boletas-vistas/conformidad',              [ErpController::class, 'confirmarBoleta']);
     });
 
     // Evaluar a mi personal — el jefe califica su sección (SP_RRHH_JEFE_* del hub)
@@ -100,5 +102,24 @@ Route::middleware(['auth:sanctum', CheckSessionActivity::class])->group(function
         Route::get('/vacaciones',                                         [EquipoController::class, 'vacaciones']);
         Route::post('/vacaciones/{empresa}/{codPersonal}/{codCorrSol}/{accion}', [EquipoController::class, 'resolverVacaciones'])
             ->whereIn('accion', ['aprobar', 'rechazar']);
+
+        // Autorizar permisos — el jefe ("Administrador de Sede" del formato) autoriza o rechaza
+        Route::get('/permisos',                                           [PermisoController::class, 'equipo']);
+        Route::get('/permisos/{empresa}/{id}',                            [PermisoController::class, 'equipoShow'])->whereNumber('id');
+        Route::get('/permisos/{empresa}/{id}/documentos/{doc}',           [PermisoController::class, 'equipoDocumento'])->whereNumber(['id', 'doc']);
+        Route::post('/permisos/{empresa}/{id}/{accion}',                  [PermisoController::class, 'equipoResolver'])
+            ->whereNumber('id')->whereIn('accion', ['autorizar', 'rechazar']);
+    });
+
+    // Mis permisos — el trabajador solicita (formato de autorización de permisos)
+    Route::prefix('permisos')->group(function () {
+        Route::get('/motivos',                 [PermisoController::class, 'motivos']);
+        Route::get('/',                        [PermisoController::class, 'index']);
+        Route::post('/',                       [PermisoController::class, 'store']);
+        Route::get('/documentos/{doc}',        [PermisoController::class, 'documento'])->whereNumber('doc');
+        Route::delete('/documentos/{doc}',     [PermisoController::class, 'quitarDocumento'])->whereNumber('doc');
+        Route::get('/{id}',                    [PermisoController::class, 'show'])->whereNumber('id');
+        Route::post('/{id}/documentos',        [PermisoController::class, 'agregarDocumento'])->whereNumber('id');
+        Route::post('/{id}/cancelar',          [PermisoController::class, 'cancelar'])->whereNumber('id');
     });
 });

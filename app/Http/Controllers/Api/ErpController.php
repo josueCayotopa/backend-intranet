@@ -448,6 +448,40 @@ class ErpController extends BaseController
     }
 
     /**
+     * El trabajador da su conformidad a la boleta de un período ya visto.
+     * Body: { periodo: "202507" }. Idempotente: si ya estaba conforme no cambia la fecha.
+     */
+    public function confirmarBoleta(Request $request): JsonResponse
+    {
+        try {
+            $v = $request->validate(['periodo' => 'required|string|regex:/^\d{6}$/']);
+        } catch (ValidationException $e) {
+            return $this->error('Datos inválidos.', 422, $e->errors());
+        }
+
+        [$dbName, $codPersonal, $codErp] = $this->resolverContexto($request);
+
+        try {
+            $result = $this->erpService->confirmarBoleta(
+                dbName:        $dbName,
+                codEmpresaErp: $codErp,
+                codPersonal:   $codPersonal,
+                anoProceso:    (int) substr($v['periodo'], 0, 4),
+                mesProceso:    (int) substr($v['periodo'], 4, 2),
+            );
+        } catch (QueryException $e) {
+            report($e);
+            return $this->error('No se pudo registrar la conformidad.', 500);
+        }
+
+        if ($result === null) {
+            return $this->error('Primero abra la boleta de este período.', 404);
+        }
+
+        return $this->success($result, 'Conformidad registrada.');
+    }
+
+    /**
      * Configuración de vacaciones del trabajador autenticado.
      * Devuelve habilitado (bool), limite_dias_anio (int|null), dias_usados_anio (int).
      * Si el SP no está instalado aún, responde con valores permisivos por defecto.

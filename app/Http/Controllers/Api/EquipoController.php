@@ -33,11 +33,17 @@ class EquipoController extends BaseController
         $esJefe = $this->servicio->esJefe($user->usuario, $user->cod_personal, (int) $user->empresa_id);
 
         $pendientes = 0;
+        $permisosPendientes = 0;
         if ($esJefe) {
             try {
                 $pendientes = count($this->servicio->solicitudesVacaciones($user->usuario, true));
             } catch (\Throwable) {
                 $pendientes = 0; // el contador no debe impedir mostrar el menú
+            }
+            try {
+                $permisosPendientes = count(app(\App\Services\PermisoService::class)->delEquipo($user->usuario, true));
+            } catch (\Throwable) {
+                $permisosPendientes = 0;
             }
         }
 
@@ -52,6 +58,7 @@ class EquipoController extends BaseController
         return $this->success([
             'es_jefe'                 => $esJefe,
             'vacaciones_pendientes'   => $pendientes,
+            'permisos_pendientes'     => $permisosPendientes,
             'es_aprobador'            => count($aprobaciones) > 0,
             'aprobaciones_pendientes' => count(array_filter($aprobaciones, fn ($a) => $a['mi_estado'] === 'P')),
         ]);
